@@ -1,13 +1,12 @@
 import time
 from typing import List
 import google.generativeai as genai
-from .config import GEMINI_API_KEY, GEMINI_MODEL
+from .config import GEMINI_API_KEY, LLM_TIMEOUT_SECS, EMBED_MODEL
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY not set")
 
-# Force a valid embeddings model
-EMBED_MODEL = GEMINI_MODEL or "models/text-embedding-004"
+
 
 genai.configure(api_key=GEMINI_API_KEY)
 

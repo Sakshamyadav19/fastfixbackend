@@ -8,11 +8,12 @@ from .config import REPO_CACHE_MAX
 from .embeddings import embed_texts
 import numpy as np
 from .vectordb import upsert_chunks, query_topk
+from typing import List
+from .vectordb import query_topk
 
 import time
 def _log(msg: str):
     print(f"[RepoPack] {msg}", flush=True)
-
 
 
 
@@ -277,3 +278,34 @@ def retrieve_issue_context_embed(pack: dict, top_k: int = 25) -> list[dict]:
         scored.append((sim, ch))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for s, c in scored[:top_k]]
+
+
+
+def retrieve_chunks_for_hints(pack: dict, k: int = 6, min_sim: float = 0.35) -> List[dict]:
+    """
+    Use vector search to get top chunks relevant to the issue, dedupe by path, cap to k.
+    Converts Chroma distance -> crude similarity = 1 - distance, filters by min_sim.
+    """
+    issue_text = f"{pack['issue']['title']}\n{pack['issue'].get('bodyText','')}"
+    # ask for more, then downselect to diverse set
+    raw = query_topk(pack["repo_key"], issue_text, top_k=24) or []
+    by_path = {}
+    for c in raw:
+        # distance lower is better; derive similarity
+        sim = 0.0
+        if c.get("score") is not None:
+            try:
+                sim = max(0.0, 1.0 - float(c["score"]))
+            except Exception:
+                sim = 0.0
+        # keep first/best per path meeting threshold
+        p = c.get("path")
+        if not p or sim < min_sim:
+            continue
+        if p not in by_path:
+            c2 = dict(c)
+            c2["similarity"] = round(sim, 3)
+            by_path[p] = c2
+        if len(by_path) >= k:
+            break
+    return list(by_path.values())

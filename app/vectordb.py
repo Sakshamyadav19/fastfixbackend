@@ -119,3 +119,17 @@ def query_topk(repo_key: str, query_text: str, top_k: int = 25) -> List[Dict[str
             "score": dists[i] if i < len(dists) else None
         })
     return out
+
+
+
+def _why_for_path(path: str, kind: str | None) -> str:
+    p = path.lower()
+    if p.endswith("app.py"): return "Flask app entrypoint"
+    if p.endswith("views.py"): return "Django view logic"
+    if p.endswith("urls.py"): return "Django router"
+    if p.endswith("requirements.txt"): return "Python dependencies"
+    if p.endswith("package.json"): return "Node/React scripts & deps"
+    if "readme" in p: return "Project overview & setup"
+    if "tests" in p or "/test" in p: return "Unit/Integration tests"
+    return kind or "file"
+
