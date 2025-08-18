@@ -22,6 +22,8 @@ Output Sections (and only these):
 5. Gotchas
 
 Length: 250 words max.
+
+Return strict JSON only with keys: high_level_goal (string), where_to_work (array of strings), what_to_change (array of strings), how_to_verify (array of strings), gotchas (array of strings). Do not include any other text.
 """
 
 def build_user_message(issue, readme_excerpt, deps_excerpt, tests_excerpt, chunks):

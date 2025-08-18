@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
 import asyncio, re, time
+import json
+
 
 from .github import github_graphql_search
 from .repopack import build_repo_pack, retrieve_chunks_for_hints
@@ -211,6 +213,97 @@ def _classify_into_schema(text: str) -> dict:
         "gotchas": gotchas,
     }
 
+_JSON_BLOCK = re.compile(r'\{[\s\S]*\}')
+
+_EXPECTED_KEYS = ["high_level_goal","where_to_work","what_to_change","how_to_verify","gotchas"]
+
+def _clean_item(s: str) -> str:
+    s = (s or "").strip()
+    # drop leading bullets/numbering/headings
+    s = s.lstrip("•*- \t")
+    s = re.sub(r'^\d+[\.\)]\s*', '', s)          # 1.  2) etc
+    s = re.sub(r'^\s*(High[- ]?level goal|Where to work|What to change|How to verify|Gotchas)\s*:?\s*$', '', s, flags=re.I)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+def _norm_list(xs, limit):
+    out = []
+    for x in (xs or []):
+        x = _clean_item(str(x))
+        if not x: 
+            continue
+        if len(x) <= 2:   # drop "1." or other stubs
+            continue
+        out.append(x[:300])
+        if len(out) >= limit:
+            break
+    # dedupe preserve order
+    seen, uniq = set(), []
+    for i in out:
+        k = i.lower()
+        if k in seen: 
+            continue
+        seen.add(k)
+        uniq.append(i)
+    return uniq
+
+def _normalize_schema(d: dict) -> dict:
+    # ensure all keys present with correct types
+    out = {k: d.get(k) for k in _EXPECTED_KEYS}
+    out["high_level_goal"] = _clean_item(out.get("high_level_goal") or "")
+    out["where_to_work"]   = _norm_list(out.get("where_to_work") or [], 3)
+    out["what_to_change"]  = _norm_list(out.get("what_to_change") or [], 3)
+    out["how_to_verify"]   = _norm_list(out.get("how_to_verify") or [], 2)
+    out["gotchas"]         = _norm_list(out.get("gotchas") or [], 2)
+
+    # rebalance: if all lists empty but we have a goal, clone a gentle nudge
+    if not any([out["where_to_work"], out["what_to_change"], out["how_to_verify"]]):
+        if out["high_level_goal"]:
+            out["what_to_change"] = [out["high_level_goal"]]
+
+    # if goal missing but what_to_change has content, promote first item
+    if not out["high_level_goal"] and out["what_to_change"]:
+        out["high_level_goal"] = out["what_to_change"][0]
+
+    return out
+
+def _parse_llm_json(raw_text: str) -> dict | None:
+    """
+    Try to parse strict JSON from the model; return normalized dict or None.
+    """
+    if not raw_text:
+        return None
+    # grab the first JSON-looking block
+    m = _JSON_BLOCK.search(raw_text)
+    block = m.group(0) if m else raw_text
+    try:
+        obj = json.loads(block)
+        # allow top-level nesting under "hints"
+        if isinstance(obj, dict) and "hints" in obj and isinstance(obj["hints"], dict):
+            obj = obj["hints"]
+        if not isinstance(obj, dict):
+            return None
+        # accept both snake_case and space headings
+        mapped = {}
+        for k in _EXPECTED_KEYS:
+            if k in obj:
+                mapped[k] = obj[k]
+            else:
+                # allow alternate keys e.g. "High-level goal"
+                alt = {
+                    "high_level_goal": ["High-level goal","High level goal","Goal"],
+                    "where_to_work": ["Where to work"],
+                    "what_to_change": ["What to change"],
+                    "how_to_verify": ["How to verify","Verification"],
+                    "gotchas": ["Gotchas","Caveats","Pitfalls"],
+                }[k]
+                for a in alt:
+                    if a in obj:
+                        mapped[k] = obj[a]
+                        break
+        return _normalize_schema(mapped)
+    except Exception:
+        return None
 
 def _postprocess_llm_text(text: str) -> dict:
     """
@@ -328,19 +421,24 @@ def starter_kit():
 
 
         # If not cached, call LLM (with graceful parsing)
+        # If not cached, call LLM (with graceful parsing)
         if hints is None:
             user_msg = build_user_message(issue, readme_excerpt, deps_excerpt, tests_excerpt, chunks)
             try:
                 raw_text = await generate_hints_text(SYSTEM_PROMPT, user_msg)
-                hints = _postprocess_llm_text(raw_text)
+                # NEW: try JSON first
+                parsed = _parse_llm_json(raw_text)
+                if parsed:
+                    hints = parsed
+                else:
+                    # fallback to the existing text post-processor
+                    hints = _postprocess_llm_text(raw_text)
                 fallback = False
             except Exception as e:
-                print("LLM_ERROR:", repr(e))  # <-- add this line
+                print("LLM_ERROR:", repr(e))
                 hints = _fallback_hints(issue)
                 fallback = True
 
-            if not fallback:
-                _HINTS_CACHE[cache_key] = (time.time() + HINTS_CACHE_TTL, {"hints": hints, "hints_fallback": False})
 
 
         return {
