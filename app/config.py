@@ -12,7 +12,7 @@ GITHUB_RAW_URL     = os.getenv("GITHUB_RAW_URL", "https://raw.githubusercontent.
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 # CORS
-CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
+CORS_ORIGIN = os.getenv("CORS_ORIGIN")
 
 # Repo Pack cache sizing
 REPO_CACHE_MAX = int(os.getenv("REPO_CACHE_MAX", "20"))
